@@ -24,12 +24,22 @@ if 'next_id' not in st.session_state:
 # --- HELPER FUNCTIONS ---
 
 def get_current_slide():
-    """Returns the dictionary for the currently selected slide."""
-    if not st.session_state.slides:
+    """
+    Returns the dictionary for the currently selected slide.
+    Includes a safety check to prevent index errors after deletions.
+    """
+    # Safety check: If slides list is empty, create a default one.
+    if 'slides' not in st.session_state or not st.session_state.slides:
         st.session_state.slides = [{'id': 0, 'title': 'Slide 1', 'text': '', 'image_prompt': None, 'image_url': None}]
         st.session_state.current_slide_idx = 0
         st.session_state.next_id = 1
+
+    # Safety check: Ensure the current index is always valid.
+    if st.session_state.current_slide_idx >= len(st.session_state.slides):
+        st.session_state.current_slide_idx = len(st.session_state.slides) - 1
+    
     return st.session_state.slides[st.session_state.current_slide_idx]
+
 
 def generate_image_from_prompt(prompt):
     """
@@ -43,10 +53,7 @@ def generate_image_from_prompt(prompt):
             st.error("OpenAI API key is not set in Streamlit secrets.")
             return None
         
-        # Explicitly create an httpx client to bypass environment proxies
         http_client = httpx.Client(proxies={})
-
-        # Initialize the OpenAI client with the key and our new http_client
         client = OpenAI(api_key=api_key, http_client=http_client)
 
         response = client.images.generate(
@@ -97,7 +104,8 @@ with col_left:
     
     st.write("---")
 
-    for i, slide in enumerate(st.session_state.slides):
+    # Use a copy of the list for safe iteration
+    for i, slide in enumerate(list(st.session_state.slides)):
         with st.container(border=True):
             is_selected = (i == st.session_state.current_slide_idx)
             label = f"Slide {i+1}" + (" (Selected)" if is_selected else "")
@@ -109,8 +117,7 @@ with col_left:
             if st.button(f"🗑️ Delete", key=f"delete_{slide['id']}", use_container_width=True):
                 if len(st.session_state.slides) > 1:
                     st.session_state.slides.pop(i)
-                    if st.session_state.current_slide_idx >= i:
-                        st.session_state.current_slide_idx = max(0, st.session_state.current_slide_idx - 1)
+                    # The get_current_slide function will now handle index correction
                     st.rerun()
                 else:
                     st.warning("Cannot delete the last slide.")
@@ -120,7 +127,9 @@ with col_center:
     st.header("Presentation Editor")
     st.write("---")
     
+    # This call is now safe because of the checks inside the function
     current_slide = get_current_slide()
+    
     new_title = st.text_input("Slide Title", value=current_slide['title'], key=f"title_{current_slide['id']}")
     current_slide['title'] = new_title
     new_text = st.text_area("Slide Text / Bullet Points", value=current_slide['text'], height=200, key=f"text_{current_slide['id']}")
