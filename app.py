@@ -49,7 +49,10 @@ def generate_image_from_prompt(prompt):
             st.error("OpenAI API key is not set in Streamlit secrets.")
             return None
         
+        # THIS IS THE CRITICAL FIX FOR THE PROXY ERROR
         http_client = httpx.Client(proxies={})
+
+        # The client is initialized with the custom http_client
         client = OpenAI(api_key=api_key, http_client=http_client)
 
         response = client.images.generate(
@@ -64,6 +67,7 @@ def generate_image_from_prompt(prompt):
         return image_url
 
     except Exception as e:
+        # Display the actual error to help debug API key or other issues
         st.error(f"Failed to generate image. Error: {e}")
         return None
 
