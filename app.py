@@ -45,19 +45,20 @@ def get_current_slide():
 def generate_image_from_prompt(prompt, api_key):
     """
     Generates an image using the OpenAI DALL-E 3 API with a user-provided key.
-    Configures an httpx.Client to avoid proxy-related errors.
+    Uses an HTTPX client to handle requests and avoid proxy-related issues.
     """
     try:
         if not api_key:
             st.error("OpenAI API key is missing. Please enter it in the sidebar.")
             return None
 
-        # Create an HTTPX client; proxies are handled at the HTTPX level, not in OpenAI init
-        http_client = httpx.Client(proxies={})
+        # Create a default HTTPX client
+        http_client = httpx.Client()
 
-        # Initialize the OpenAI client correctly with the custom HTTP client
+        # Initialize the OpenAI client with the custom HTTP client
         client = OpenAI(api_key=api_key, http_client=http_client)
 
+        # Generate the image
         response = client.images.generate(
             model="dall-e-3",
             prompt=prompt,
@@ -67,17 +68,16 @@ def generate_image_from_prompt(prompt, api_key):
         )
 
         # Extract and return the generated image URL
-        image_url = response.data[0].url
-        return image_url
+        return response.data[0].url
 
     except Exception as e:
         error_msg = str(e)
-        # Handle invalid API key error specifically
         if "Incorrect API key" in error_msg:
             st.error("The provided OpenAI API key is incorrect. Please check and re-enter it.")
         else:
             st.error(f"Failed to generate image. Error: {error_msg}")
         return None
+
 
 def create_download_link(val, filename):
     """
