@@ -1,8 +1,8 @@
 import streamlit as st
 from fpdf import FPDF
 import base64
-import requests # Needed to download the image for PDF export
-from openai import OpenAI # Import the OpenAI library
+from openai import OpenAI
+import requests # Needed to download the image for PDF embedding
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -12,14 +12,15 @@ st.set_page_config(
 )
 
 # --- STATE MANAGEMENT ---
+# Initialize session state to hold the presentation slides and current selection
 if 'slides' not in st.session_state:
+    # Each slide is a dictionary
     st.session_state.slides = [{
         'id': 0,
         'title': 'Slide 1: Title',
         'text': 'Add your bullet points here.',
         'image_prompt': None,
-        'image_url': None,
-        'image_bytes': None # Store image bytes for PDF export
+        'image_url': None
     }]
 if 'current_slide_idx' not in st.session_state:
     st.session_state.current_slide_idx = 0
@@ -30,48 +31,47 @@ if 'next_id' not in st.session_state:
 
 def get_current_slide():
     """Returns the dictionary for the currently selected slide."""
+    if not st.session_state.slides:
+        # Handle case where all slides are deleted
+        st.session_state.slides = [{
+            'id': 0, 'title': 'Slide 1', 'text': '', 'image_prompt': None, 'image_url': None
+        }]
+        st.session_state.current_slide_idx = 0
+        st.session_state.next_id = 1
     return st.session_state.slides[st.session_state.current_slide_idx]
 
 def generate_image_from_prompt(prompt):
     """
-    *** REAL IMAGE GENERATION - Updated Function ***
     Generates an image using the OpenAI DALL-E 3 API.
-    It securely accesses the API key from st.secrets.
+    It securely reads the API key from Streamlit's secrets manager.
     """
     try:
-        # 1. Access the secret API key from Streamlit's secrets manager
+        # 1. Securely access the API key from Streamlit secrets
         api_key = st.secrets["OPENAI_API_KEY"]
         if not api_key:
-            st.error("OpenAI API key is not set in secrets. Please add it.")
-            return None, None
-
-        # 2. Instantiate the OpenAI client
+            st.error("OpenAI API key is not set in Streamlit secrets.")
+            return None
+            
+        # 2. Initialize the OpenAI client with the key
         client = OpenAI(api_key=api_key)
 
-        # 3. Make the API call to DALL-E 3
+        # 3. Make the API call to generate the image
         response = client.images.generate(
             model="dall-e-3",
             prompt=prompt,
-            size="1792x1024",  # 16:9 aspect ratio for DALL-E 3
+            size="1792x1024",  # A 16:9 aspect ratio size supported by DALL-E 3
             quality="standard",
             n=1,
         )
-
-        # 4. Get the URL of the generated image
-        image_url = response.data[0].url
         
-        # 5. Download the image bytes to store for PDF export
-        image_response = requests.get(image_url)
-        image_response.raise_for_status() # Raise an exception for bad status codes
-        image_bytes = image_response.content
-
-        return image_url, image_bytes
+        # 4. Extract the URL of the generated image
+        image_url = response.data[0].url
+        return image_url
 
     except Exception as e:
-        # If the key is not found or the API call fails, show an error.
-        st.error(f"An error occurred during image generation: {e}")
-        return None, None
-
+        # Handle cases where the secret is missing or the API call fails
+        st.error(f"Failed to generate image. Error: {e}")
+        return None
 
 def create_download_link(val, filename):
     """Creates a download link for a file."""
@@ -79,6 +79,7 @@ def create_download_link(val, filename):
     return f'<a href="data:application/octet-stream;base64,{b64.decode()}" download="{filename}">Download PDF</a>'
 
 # --- UI LAYOUT ---
+# Define the three main columns for the layout
 col_left, col_center, col_right = st.columns([0.2, 0.5, 0.3])
 
 # --- LEFT SIDEBAR (Slide Management) ---
@@ -86,14 +87,14 @@ with col_left:
     st.header("Slides")
     st.write("---")
 
+    # Add and Reorder Buttons
     if st.button("➕ Add New Slide", use_container_width=True):
         new_slide = {
             'id': st.session_state.next_id,
             'title': f'Slide {st.session_state.next_id + 1}: New Slide',
             'text': '',
             'image_prompt': None,
-            'image_url': None,
-            'image_bytes': None
+            'image_url': None
         }
         st.session_state.slides.append(new_slide)
         st.session_state.next_id += 1
@@ -106,20 +107,20 @@ with col_left:
         st.session_state.current_slide_idx = idx - 1
         st.rerun()
 
-    if st.button("⬇️ Move Slide Down", use_container_width=True, disabled=(idx == len(st.session_state.slides) - 1)):
+    if st.button("⬇️ Move Slide Down", use_container_width=True, disabled=(idx >= len(st.session_state.slides) - 1)):
         st.session_state.slides.insert(idx + 1, st.session_state.slides.pop(idx))
         st.session_state.current_slide_idx = idx + 1
         st.rerun()
     
     st.write("---")
 
+    # Display slide thumbnails and handle selection
     for i, slide in enumerate(st.session_state.slides):
         with st.container(border=True):
             is_selected = (i == st.session_state.current_slide_idx)
-            label = f"**Slide {i+1} (Selected)**" if is_selected else f"Slide {i+1}"
-            st.markdown(label)
+            label = f"Slide {i+1}" + (" (Selected)" if is_selected else "")
             
-            if not is_selected and st.button(f"Select", key=f"select_{slide['id']}", use_container_width=True):
+            if st.button(label, key=f"select_{slide['id']}", use_container_width=True, type="primary" if is_selected else "secondary"):
                 st.session_state.current_slide_idx = i
                 st.rerun()
             
@@ -138,14 +139,19 @@ with col_center:
     st.write("---")
     
     current_slide = get_current_slide()
+
+    # Edit Title
     new_title = st.text_input("Slide Title", value=current_slide['title'], key=f"title_{current_slide['id']}")
     current_slide['title'] = new_title
+
+    # Edit Text
     new_text = st.text_area("Slide Text / Bullet Points", value=current_slide['text'], height=200, key=f"text_{current_slide['id']}")
     current_slide['text'] = new_text
 
     st.write("---")
     st.subheader("Slide Preview")
 
+    # Display the image on the slide if it exists
     if current_slide['image_url']:
         st.image(current_slide['image_url'], caption=f"Generated from: {current_slide['image_prompt']}")
     else:
@@ -158,40 +164,50 @@ with col_right:
     
     with st.form("prompt_form"):
         st.info("Fill out the variables below to construct the image prompt.")
+        
         subject = st.text_input("Subject", "a silver dragon perched on a jagged cliff")
         action = st.text_input("Action", "roaring toward the stormy sky")
         environment = st.text_input("Environment", "craggy seaside coast at dusk")
-        style = st.selectbox("Style", ("digital matte painting, hyper-realistic", "illustration", "abstract", "photorealistic", "cel-shaded anime"))
+        style = st.selectbox("Style", ("digital matte painting, hyper-realistic", "illustration", "abstract", "photorealistic", "cel-shaded anime"), help="Suggests relevant descriptions for the style variable.")
         perspective = st.text_input("Perspective", "low-angle shot")
         lighting = st.text_input("Lighting", "dramatic backlight with lightning flashes")
         color_palette = st.text_input("Color Palette", "dark slate grays with electric blue highlights")
-        key_details = st.text_input("Key Details", "swirling mist around wings")
+        key_details = st.text_input("Key Details", "swirling mist around wings, ancient carved runes on cliff face")
         atmosphere = st.text_input("Atmosphere", "tense and awe-inspiring")
-        composition = st.text_input("Composition", "dragon silhouette centered against lightning")
+        composition = st.text_input("Composition", "dragon silhouette centered against lightning bolts")
+        
         submitted = st.form_submit_button("Generate Image", use_container_width=True, type="primary")
 
     if submitted:
-        final_prompt = (f"Subject: {subject}, Action: {action}, Environment: {environment}, Style: {style}, "
-                        f"Perspective: {perspective}, Lighting: {lighting}, Color Palette: {color_palette}, "
-                        f"Key Details: {key_details}, Atmosphere: {atmosphere}, Composition: {composition}.")
-        with st.spinner("Generating image... This may take a moment."):
-            image_url, image_bytes = generate_image_from_prompt(final_prompt)
-            if image_url and image_bytes:
+        final_prompt = (
+            f"Subject: {subject}, Action: {action}, Environment: {environment}, Style: {style}, "
+            f"Perspective: {perspective}, Lighting: {lighting}, Color Palette: {color_palette}, "
+            f"Key Details: {key_details}, Atmosphere: {atmosphere}, Composition: {composition}. "
+            f"Output Specs: 16:9 aspect ratio, 3840x2160"
+        ).strip()
+        
+        with st.spinner("Contacting the digital artist (DALL-E 3)... Please wait."):
+            image_url = generate_image_from_prompt(final_prompt)
+            if image_url:
                 st.session_state.generated_prompt = final_prompt
                 st.session_state.generated_image_url = image_url
-                st.session_state.generated_image_bytes = image_bytes
-
+            else:
+                # Error is already shown by the helper function
+                pass
+    
     if "generated_image_url" in st.session_state and st.session_state.generated_image_url:
         st.write("---")
         st.subheader("Generated Image")
-        st.image(st.session_state.generated_image_url, caption="Generated from API")
+        st.image(st.session_state.generated_image_url, caption="Generated by DALL-E 3")
+        
+        with st.expander("View Full Prompt"):
+            st.write(st.session_state.generated_prompt)
+
         if st.button("✅ Add Image to Current Slide", use_container_width=True):
             slide = get_current_slide()
             slide['image_url'] = st.session_state.generated_image_url
-            slide['image_bytes'] = st.session_state.generated_image_bytes
             slide['image_prompt'] = st.session_state.generated_prompt
             del st.session_state.generated_image_url
-            del st.session_state.generated_image_bytes
             del st.session_state.generated_prompt
             st.rerun()
 
@@ -201,20 +217,31 @@ with col_right:
     if st.button("Export to PDF", use_container_width=True):
         with st.spinner("Creating PDF..."):
             pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            
             for i, slide in enumerate(st.session_state.slides):
                 pdf.add_page()
                 pdf.set_font("Arial", "B", 16)
                 pdf.cell(0, 10, slide['title'], 0, 1, 'C')
                 pdf.ln(5)
                 
-                if slide.get('image_bytes'):
-                    # Embed the image directly into the PDF from memory
-                    pdf.image(BytesIO(slide['image_bytes']), x=10, y=30, w=190)
-                    pdf.ln(110) # Adjust space after image
+                if slide.get('image_url'):
+                    try:
+                        # Download image data from URL
+                        response = requests.get(slide['image_url'])
+                        response.raise_for_status() # Raise an exception for bad status codes
+                        # Save image to a temporary file
+                        with open("temp_image.jpg", "wb") as f:
+                            f.write(response.content)
+                        # Add image to PDF - calculate position to center it
+                        pdf.image("temp_image.jpg", x=10, y=30, w=pdf.w - 20)
+                        pdf.ln(105) # Adjust space after image
+                    except requests.exceptions.RequestException as e:
+                        pdf.set_font("Arial", "I", 10)
+                        pdf.multi_cell(0, 5, f"(Could not download image for PDF: {e})")
 
                 pdf.set_font("Arial", "", 12)
                 pdf.multi_cell(0, 10, slide['text'])
 
             pdf_output = pdf.output(dest='S').encode('latin-1')
             st.markdown(create_download_link(pdf_output, "presentation.pdf"), unsafe_allow_html=True)
-
