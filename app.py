@@ -1,31 +1,24 @@
 import streamlit as st
+from fpdf import FPDF
 import base64
 import httpx
 from openai import OpenAI
 import requests
 import os
-from io import BytesIO
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
-from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE
 
-# --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Art Director's Briefing Tool",
     page_icon="🎨",
     layout="wide"
 )
 
-# --- SESSION STATE INITIALIZATION ---
 if 'slides' not in st.session_state:
     st.session_state.slides = [{
         'id': 0,
         'title': 'Slide 1: Title',
-        'text': 'Add your message to users here.',
+        'text': 'Add your bullet points here.',
         'image_prompt': None,
         'image_url': None,
-        'image_bytes': None, # To store downloaded image data
         'text_position': 'bottom'
     }]
 if 'current_slide_idx' not in st.session_state:
@@ -35,40 +28,21 @@ if 'next_id' not in st.session_state:
 if 'openai_api_key' not in st.session_state:
     st.session_state.openai_api_key = ""
 
-# --- HELPER FUNCTIONS ---
-
-def generate_and_download_image(prompt: str, api_key: str) -> tuple[str, bytes] | None:
-    """
-    Generates an image, returns its URL and its content in bytes.
-    This contains the fix for the 'proxies' error.
-    """
+def generate_image_from_prompt(prompt: str, api_key: str) -> str | None:
     if not api_key:
         st.error("OpenAI API key is missing. Please enter it in the sidebar.")
         return None
     try:
-        # CORRECTLY initialize the client to prevent proxy errors.
-        http_client = httpx.Client(proxies={})
+        http_client = httpx.Client()
         client = OpenAI(api_key=api_key, http_client=http_client)
-        
-        st.info("Generating image with DALL-E 3...")
         response = client.images.generate(
             model="dall-e-3",
             prompt=prompt,
-            size="1792x1024", # 16:9 aspect ratio
+            size="1792x1024",
             quality="standard",
             n=1
         )
-        image_url = response.data[0].url
-        
-        # Download the image content immediately
-        st.info("Downloading generated image...")
-        image_response = requests.get(image_url, timeout=30)
-        image_response.raise_for_status()
-        image_bytes = image_response.content
-        st.success("Image successfully generated and downloaded!")
-        
-        return image_url, image_bytes
-
+        return response.data[0].url
     except Exception as e:
         msg = str(e)
         if "Incorrect API key" in msg:
@@ -77,107 +51,96 @@ def generate_and_download_image(prompt: str, api_key: str) -> tuple[str, bytes] 
             st.error(f"Image generation failed: {msg}")
         return None
 
-def create_pptx_from_slides(slides: list[dict]) -> BytesIO:
-    """
-    Creates a PowerPoint presentation from the slide data and returns it as a BytesIO stream.
-    """
-    prs = Presentation()
-    # Use a 16:9 slide layout
-    prs.slide_width = Inches(16)
-    prs.slide_height = Inches(9)
+def create_pdf_bytes_from_slides(slides: list[dict]) -> bytes:
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    for i, slide in enumerate(slides):
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, slide.get('title', ''), ln=1, align='C')
+        pdf.ln(5)
+        image_url = slide.get('image_url')
+        if image_url:
+            try:
+                resp = requests.get(image_url)
+                resp.raise_for_status()
+                img_path = f"temp_slide_{i}.jpg"
+                with open(img_path, 'wb') as f:
+                    f.write(resp.content)
+                pdf.image(img_path, x=10, y=30, w=pdf.w - 20)
+                pdf.ln(105)
+                os.remove(img_path)
+            except Exception as img_err:
+                pdf.set_font("Arial", "I", 10)
+                pdf.multi_cell(0, 5, f"(Image embed failed: {img_err})")
+                pdf.ln(5)
+        position = slide.get('text_position', 'bottom')
+        text = slide.get('text', '')
+        pdf.set_fill_color(0, 0, 0)
+        pdf.set_text_color(255, 255, 255)
+        w = pdf.w - 20
+        h = 50
+        if position == 'top':
+            x, y = 10, 30
+        elif position == 'center':
+            x, y = 10, (pdf.h / 2) - (h / 2)
+        else:
+            x, y = 10, pdf.h - h - 15
+        pdf.rect(x, y, w, h, 'F')
+        pdf.set_xy(x + 2, y + 2)
+        pdf.set_font("Arial", "", 12)
+        pdf.multi_cell(w - 4, 8, text)
+        pdf.set_text_color(0, 0, 0)
+    pdf_data = pdf.output(dest='S')
+    if isinstance(pdf_data, str):
+        return pdf_data.encode('latin-1')
+    return pdf_data
 
-    for slide_data in slides:
-        # Add a blank slide layout
-        blank_slide_layout = prs.slide_layouts[6] 
-        slide = prs.slides.add_slide(blank_slide_layout)
+def create_download_link(val: bytes, filename: str) -> str:
+    b64 = base64.b64encode(val).decode()
+    return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download {filename}</a>'
 
-        # Add image as the background
-        if slide_data.get('image_bytes'):
-            image_stream = BytesIO(slide_data['image_bytes'])
-            slide.shapes.add_picture(image_stream, Inches(0), Inches(0), width=prs.slide_width, height=prs.slide_height)
+col_left, col_center, col_right = st.columns([0.2, 0.5, 0.3])
 
-        # Add text box overlay for the message
-        text = slide_data.get('text', '')
-        if text:
-            # Define text box dimensions (90% of slide width)
-            tx_width = Inches(14.2)
-            tx_height = Inches(2.5) # Generous height for multiple lines
-            tx_left = Inches(0.9) # Centered horizontally
-
-            # Position text box based on user selection
-            position = slide_data.get('text_position', 'bottom')
-            if position == 'top':
-                tx_top = Inches(0.5)
-            elif position == 'center':
-                tx_top = (prs.slide_height - tx_height) / 2
-            else: # bottom
-                tx_top = prs.slide_height - tx_height - Inches(0.5)
-
-            # Add the text box shape
-            tx_box = slide.shapes.add_textbox(tx_left, tx_top, tx_width, tx_height)
-            
-            # --- FORMATTING FOR READABILITY ---
-            # Add a semi-transparent background to the text box
-            fill = tx_box.fill
-            fill.solid()
-            fill.fore_color.rgb = RGBColor(0, 0, 0) # Black background
-            fill.transparency = 0.30 # 30% transparent
-            
-            # Set text frame properties
-            text_frame = tx_box.text_frame
-            text_frame.clear()
-            text_frame.margin_left = Inches(0.2)
-            text_frame.margin_right = Inches(0.2)
-            text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE # Center text vertically
-            text_frame.word_wrap = True
-            text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
-            
-            # Add and format the text
-            p = text_frame.paragraphs[0]
-            p.text = text
-            p.font.name = 'Calibri'
-            p.font.size = Pt(32)
-            p.font.bold = True
-            p.font.color.rgb = RGBColor(255, 255, 255) # White text
-
-    # Save presentation to a byte stream
-    pptx_stream = BytesIO()
-    prs.save(pptx_stream)
-    pptx_stream.seek(0)
-    return pptx_stream
-
-# --- UI LAYOUT ---
-col_left, col_center, col_right = st.columns([0.25, 0.45, 0.3])
-
-# --- LEFT SIDEBAR ---
 with col_left:
     st.header("Settings")
     st.session_state.openai_api_key = st.text_input(
         "Enter OpenAI API Key",
         type="password",
         value=st.session_state.openai_api_key,
-        help="Your API key is stored temporarily for this session."
+        help="Your API key is stored temporarily and not saved."
     )
     st.write("---")
-
     st.header("Slides")
     if st.button("➕ Add New Slide", use_container_width=True):
-        new_id = st.session_state.next_id
         new_slide = {
-            'id': new_id, 'title': f'Slide {new_id + 1}: New Slide', 'text': 'Add your message here.',
-            'image_prompt': None, 'image_url': None, 'image_bytes': None, 'text_position': 'bottom'
+            'id': st.session_state.next_id,
+            'title': f'Slide {st.session_state.next_id + 1}: New Slide',
+            'text': '',
+            'image_prompt': None,
+            'image_url': None,
+            'text_position': 'bottom'
         }
         st.session_state.slides.append(new_slide)
         st.session_state.next_id += 1
         st.session_state.current_slide_idx = len(st.session_state.slides) - 1
         st.rerun()
-
-    # Display slide list for selection and management
+    idx = st.session_state.current_slide_idx
+    if st.button("⬆️ Move Slide Up", use_container_width=True, disabled=(idx == 0)):
+        st.session_state.slides.insert(idx - 1, st.session_state.slides.pop(idx))
+        st.session_state.current_slide_idx = idx - 1
+        st.rerun()
+    if st.button("⬇️ Move Slide Down", use_container_width=True, disabled=(idx >= len(st.session_state.slides) - 1)):
+        st.session_state.slides.insert(idx + 1, st.session_state.slides.pop(idx))
+        st.session_state.current_slide_idx = idx + 1
+        st.rerun()
+    st.write("---")
     for i, slide in enumerate(list(st.session_state.slides)):
-        with st.container(border=True, height=120):
-            is_selected = (i == st.session_state.current_slide_idx)
-            label = f"Slide {i+1}" + (" (Selected)" if is_selected else "")
-            if st.button(label, key=f"select_{slide['id']}", use_container_width=True, type="primary" if is_selected else "secondary"):
+        with st.container(border=True):
+            is_sel = (i == st.session_state.current_slide_idx)
+            label = f"Slide {i+1}" + (" (Selected)" if is_sel else "")
+            if st.button(label, key=f"select_{slide['id']}", use_container_width=True,
+                         type="primary" if is_sel else "secondary"):
                 st.session_state.current_slide_idx = i
                 st.rerun()
             if st.button("🗑️ Delete", key=f"delete_{slide['id']}", use_container_width=True):
@@ -187,100 +150,85 @@ with col_left:
                 else:
                     st.warning("Cannot delete the last slide.")
 
-# --- CENTER PANEL (EDITOR) ---
 with col_center:
     st.header("Presentation Editor")
     st.write("---")
-    
-    current_slide = st.session_state.slides[st.session_state.current_slide_idx]
-    
-    current_slide['title'] = st.text_input("Slide Title (for reference)", value=current_slide['title'], key=f"title_{current_slide['id']}")
-    current_slide['text'] = st.text_area("Message to Overlay on Image", value=current_slide['text'], height=150, key=f"text_{current_slide['id']}")
-    
-    pos_options = ['bottom', 'top', 'center']
-    current_pos_index = pos_options.index(current_slide.get('text_position', 'bottom'))
-    current_slide['text_position'] = st.selectbox("Text Position on Image", pos_options, index=current_pos_index, key=f"pos_{current_slide['id']}")
-
+    curr = st.session_state.slides[st.session_state.current_slide_idx]
+    title = st.text_input("Slide Title", value=curr['title'], key=f"title_{curr['id']}")
+    curr['title'] = title
+    text = st.text_area("Slide Text / Bullet Points", value=curr['text'], height=200, key=f"text_{curr['id']}")
+    curr['text'] = text
+    position = st.selectbox("Text Position", ['bottom', 'top', 'center'], index=['bottom', 'top', 'center'].index(curr.get('text_position', 'bottom')))
+    curr['text_position'] = position
     st.write("---")
     st.subheader("Slide Preview")
-    
-    if current_slide.get('image_url'):
-        st.image(current_slide['image_url'], caption=f"Generated from: {current_slide.get('image_prompt')}")
+    if curr.get('image_url'):
+        st.image(curr['image_url'], caption=f"Generated from: {curr.get('image_prompt')}")
     else:
-        st.info("Use the Image Generator on the right to create a background for this slide.")
+        st.info("Generate an image in the right panel and add it to this slide.")
+    st.markdown(f"<div style='position:relative;width:100%;height:200px;'>"
+                f"<div style='position:absolute;"
+                f"bottom:{'0' if position=='bottom' else 'auto'};"
+                f"top:{'0' if position=='top' else 'auto'};"
+                f"left:0;right:0;"
+                f"background-color:black;opacity:0.7;padding:10px;'>"
+                f"<p style='color:white;margin:0;'>{text.replace('\n','<br>')}</p>"
+                f"</div></div>", unsafe_allow_html=True)
 
-# --- RIGHT SIDEBAR (GENERATOR) ---
 with col_right:
     st.header("Image Generator")
     st.write("---")
-    
     with st.form("prompt_form"):
+        st.info("Fill out the variables below to construct the image prompt.")
         subject = st.text_input("Subject", "a silver dragon perched on a jagged cliff")
         action = st.text_input("Action", "roaring toward the stormy sky")
         environment = st.text_input("Environment", "craggy seaside coast at dusk")
-        style = st.selectbox("Style", ("digital matte painting, hyper-realistic", "illustration", "abstract", "photorealistic", "cel-shaded anime"))
-        # Add more fields as needed...
-        
-        submitted = st.form_submit_button("Generate & Download Image", use_container_width=True, type="primary")
-        if submitted:
+        style = st.selectbox("Style", ("digital matte painting, hyper-realistic","illustration","abstract","photorealistic","cel-shaded anime"))
+        perspective = st.text_input("Perspective", "low-angle shot")
+        lighting = st.text_input("Lighting", "dramatic backlight with lightning flashes")
+        color_palette = st.text_input("Color Palette", "dark slate grays with electric blue highlights")
+        key_details = st.text_input("Key Details", "swirling mist around wings, ancient carved runes on cliff face")
+        atmosphere = st.text_input("Atmosphere", "tense and awe-inspiring")
+        composition = st.text_input("Composition", "dragon silhouette centered against lightning bolts")
+        if st.form_submit_button("Generate Image", use_container_width=True, type="primary"):
             if not st.session_state.openai_api_key:
-                st.error("Please enter your OpenAI API key in the left sidebar.")
+                st.error("Please enter your OpenAI API key in the left sidebar before generating an image.")
             else:
-                final_prompt = f"{subject} {action}, {environment}, in the style of a {style}, 16:9 aspect ratio"
-                
-                with st.spinner("Generating and downloading your image..."):
-                    result = generate_and_download_image(final_prompt, st.session_state.openai_api_key)
-                
-                if result:
-                    image_url, image_bytes = result
-                    # Temporarily store the downloaded image data in session state
-                    st.session_state.generated_image_url = image_url
-                    st.session_state.generated_image_bytes = image_bytes
-                    st.session_state.generated_prompt = final_prompt
-                    st.rerun()
-
-    # Display the generated image and offer to add it to the current slide
+                final_prompt = (
+                    f"Subject: {subject}, Action: {action}, Environment: {environment}, Style: {style}, "
+                    f"Perspective: {perspective}, Lighting: {lighting}, Color Palette: {color_palette}, "
+                    f"Key Details: {key_details}, Atmosphere: {atmosphere}, Composition: {composition}. "
+                    f"Output Specs: 16:9 aspect ratio, 3840x2160"
+                ).strip()
+                with st.spinner("Contacting the digital artist (DALL-E 3)... Please wait."):
+                    url = generate_image_from_prompt(final_prompt, st.session_state.openai_api_key)
+                    if url:
+                        st.session_state.generated_prompt = final_prompt
+                        st.session_state.generated_image_url = url
+                        st.rerun()
     if st.session_state.get("generated_image_url"):
         st.write("---")
         st.subheader("Generated Image")
-        st.image(st.session_state.generated_image_url, caption="Generated by DALL-E 3")
-
-        # Provide immediate download for the single image
-        st.download_button(
-            "⬇️ Download This Image", 
-            st.session_state.generated_image_bytes, 
-            file_name=f"generated_image_{st.session_state.slides[st.session_state.current_slide_idx]['id']}.png", 
-            mime="image/png",
-            use_container_width=True
-        )
-
-        if st.button("✅ Use This Image for Current Slide", use_container_width=True):
+        image_url = st.session_state.generated_image_url
+        st.image(image_url, caption="Generated by DALL-E 3")
+        try:
+            img_bytes = requests.get(image_url).content
+            st.download_button("⬇️ Download Generated Image", img_bytes, file_name="generated.png", mime="image/png")
+        except Exception:
+            pass
+        with st.expander("View Full Prompt"):
+            st.write(st.session_state.generated_prompt)
+        if st.button("✅ Add Image to Current Slide", use_container_width=True):
             slide = st.session_state.slides[st.session_state.current_slide_idx]
-            slide['image_url'] = st.session_state.generated_image_url
-            slide['image_bytes'] = st.session_state.generated_image_bytes
+            slide['image_url'] = image_url
             slide['image_prompt'] = st.session_state.generated_prompt
-            # Clean up temporary state
             del st.session_state.generated_image_url
-            del st.session_state.generated_image_bytes
             del st.session_state.generated_prompt
             st.rerun()
 
-    # --- EXPORT SECTION ---
-    st.write("---")
-    st.header("Export Brief")
-    
-    # Check if any slides have images before enabling the export button
-    can_export = any(s.get('image_bytes') for s in st.session_state.slides)
-
-    if st.button("Export to PowerPoint (.pptx)", use_container_width=True, disabled=not can_export):
-        with st.spinner("Creating your PowerPoint brief..."):
-            pptx_bytes = create_pptx_from_slides(st.session_state.slides)
-            st.download_button(
-                label="⬇️ Download Presentation",
-                data=pptx_bytes,
-                file_name="Art_Brief.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                use_container_width=True
-            )
-    elif not can_export:
-        st.info("Please add a generated image to at least one slide to enable export.")
+st.write("---")
+st.header("Export Presentation")
+if st.button("Export to PDF", use_container_width=True):
+    with st.spinner("Creating PDF..."):
+        pdf_bytes = create_pdf_bytes_from_slides(st.session_state.slides)
+        st.markdown(create_download_link(pdf_bytes, "presentation.pdf"), unsafe_allow_html=True)
