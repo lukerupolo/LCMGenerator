@@ -8,7 +8,7 @@ import httpx # Required to fix proxy issues in Streamlit Cloud
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Art Director's Briefing Tool",
-    page_icon="🎨",
+    page_icon="�",
     layout="wide"
 )
 
@@ -53,7 +53,10 @@ def generate_image_from_prompt(prompt):
             st.error("OpenAI API key is not set in Streamlit secrets.")
             return None
         
+        # THIS IS THE FIX: Explicitly create an httpx client, bypassing environment proxies
         http_client = httpx.Client(proxies={})
+
+        # THIS IS THE FIX: Initialize the OpenAI client with the key AND our new http_client
         client = OpenAI(api_key=api_key, http_client=http_client)
 
         response = client.images.generate(
@@ -117,7 +120,6 @@ with col_left:
             if st.button(f"🗑️ Delete", key=f"delete_{slide['id']}", use_container_width=True):
                 if len(st.session_state.slides) > 1:
                     st.session_state.slides.pop(i)
-                    # The get_current_slide function will now handle index correction
                     st.rerun()
                 else:
                     st.warning("Cannot delete the last slide.")
@@ -127,7 +129,6 @@ with col_center:
     st.header("Presentation Editor")
     st.write("---")
     
-    # This call is now safe because of the checks inside the function
     current_slide = get_current_slide()
     
     new_title = st.text_input("Slide Title", value=current_slide['title'], key=f"title_{current_slide['id']}")
@@ -223,3 +224,4 @@ with col_right:
 
             pdf_output = pdf.output(dest='S').encode('latin-1')
             st.markdown(create_download_link(pdf_output, "presentation.pdf"), unsafe_allow_html=True)
+�
