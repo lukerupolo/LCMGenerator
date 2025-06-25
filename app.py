@@ -45,37 +45,19 @@ def get_current_slide():
 def generate_image_from_prompt(prompt, api_key):
     """
     Generates an image using the OpenAI DALL-E 3 API with a user-provided key.
-    This function contains the specific fix for the 'proxies' error.
+    Configures an httpx.Client to avoid proxy-related errors.
     """
-    # The 'try...except' block will catch any errors during the API call.
     try:
-        # First, check if the user has actually entered an API key.
         if not api_key:
             st.error("OpenAI API key is missing. Please enter it in the sidebar.")
             return None
-        
-        #
-        # ==================== THE CRITICAL FIX IS HERE ====================
-        #
-        # The error "Client.init() got an unexpected keyword argument 'proxies'"
-        # happens when the OpenAI client is initialized incorrectly.
-        #
-        # THE WRONG WAY (CAUSES THE ERROR):
-        # client = OpenAI(api_key=api_key, proxies={})
-        #
-        # THE CORRECT WAY (IMPLEMENTED BELOW):
-        # 1. Create a separate HTTP client instance using the 'httpx' library.
-        #    We tell it to use no proxies by passing proxies={}.
+
+        # Create an HTTPX client; proxies are handled at the HTTPX level, not in OpenAI init
         http_client = httpx.Client(proxies={})
 
-        # 2. Pass this pre-configured http_client to the OpenAI client.
-        #    This is the officially supported way to handle proxies and connections.
+        # Initialize the OpenAI client correctly with the custom HTTP client
         client = OpenAI(api_key=api_key, http_client=http_client)
-        #
-        # ================== END OF THE CRITICAL FIX ===================
-        #
 
-        # If the client is initialized correctly, proceed with the API call.
         response = client.images.generate(
             model="dall-e-3",
             prompt=prompt,
@@ -83,18 +65,18 @@ def generate_image_from_prompt(prompt, api_key):
             quality="standard",
             n=1,
         )
-        
-        # Extract the URL of the generated image from the response.
+
+        # Extract and return the generated image URL
         image_url = response.data[0].url
         return image_url
 
-    # If any error occurs (e.g., wrong API key, network issue), display it.
     except Exception as e:
-        if "Incorrect API key" in str(e):
-             st.error("The provided OpenAI API key is incorrect. Please check and re-enter it.")
+        error_msg = str(e)
+        # Handle invalid API key error specifically
+        if "Incorrect API key" in error_msg:
+            st.error("The provided OpenAI API key is incorrect. Please check and re-enter it.")
         else:
-             # This will display the exact error message, including the 'proxies' error if the fix isn't working.
-             st.error(f"Failed to generate image. Error: {e}")
+            st.error(f"Failed to generate image. Error: {error_msg}")
         return None
 
 def create_download_link(val, filename):
