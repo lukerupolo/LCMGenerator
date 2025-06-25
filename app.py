@@ -3,17 +3,16 @@ from fpdf import FPDF
 import base64
 from openai import OpenAI
 import requests
-import httpx # Required to fix proxy issues in Streamlit Cloud
+import httpx
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Art Director's Briefing Tool",
-    page_icon="�",
+    page_icon="🎨",
     layout="wide"
 )
 
 # --- STATE MANAGEMENT ---
-# Initialize session state to hold the presentation slides and current selection
 if 'slides' not in st.session_state:
     st.session_state.slides = [{'id': 0, 'title': 'Slide 1: Title', 'text': 'Add your bullet points here.', 'image_prompt': None, 'image_url': None}]
 if 'current_slide_idx' not in st.session_state:
@@ -28,18 +27,15 @@ def get_current_slide():
     Returns the dictionary for the currently selected slide.
     Includes a safety check to prevent index errors after deletions.
     """
-    # Safety check: If slides list is empty, create a default one.
     if 'slides' not in st.session_state or not st.session_state.slides:
         st.session_state.slides = [{'id': 0, 'title': 'Slide 1', 'text': '', 'image_prompt': None, 'image_url': None}]
         st.session_state.current_slide_idx = 0
         st.session_state.next_id = 1
 
-    # Safety check: Ensure the current index is always valid.
     if st.session_state.current_slide_idx >= len(st.session_state.slides):
         st.session_state.current_slide_idx = len(st.session_state.slides) - 1
     
     return st.session_state.slides[st.session_state.current_slide_idx]
-
 
 def generate_image_from_prompt(prompt):
     """
@@ -53,10 +49,7 @@ def generate_image_from_prompt(prompt):
             st.error("OpenAI API key is not set in Streamlit secrets.")
             return None
         
-        # THIS IS THE FIX: Explicitly create an httpx client, bypassing environment proxies
         http_client = httpx.Client(proxies={})
-
-        # THIS IS THE FIX: Initialize the OpenAI client with the key AND our new http_client
         client = OpenAI(api_key=api_key, http_client=http_client)
 
         response = client.images.generate(
@@ -107,7 +100,6 @@ with col_left:
     
     st.write("---")
 
-    # Use a copy of the list for safe iteration
     for i, slide in enumerate(list(st.session_state.slides)):
         with st.container(border=True):
             is_selected = (i == st.session_state.current_slide_idx)
@@ -224,4 +216,3 @@ with col_right:
 
             pdf_output = pdf.output(dest='S').encode('latin-1')
             st.markdown(create_download_link(pdf_output, "presentation.pdf"), unsafe_allow_html=True)
-�
