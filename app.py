@@ -46,7 +46,7 @@ def generate_and_download_image(prompt: str, api_key: str) -> tuple[str, bytes] 
         st.error("OpenAI API key is missing. Please enter it in the sidebar.")
         return None
     try:
-        # Initialize the OpenAI client correctly as per user's working example
+        # Initialize the OpenAI client correctly
         http_client = httpx.Client()
         client = OpenAI(api_key=api_key, http_client=http_client)
         
@@ -231,18 +231,30 @@ with col_right:
     
     with st.form("prompt_form"):
         st.info("Fill out the variables below to construct the image prompt.")
+        # Restored full list of text inputs for detailed prompt engineering
         subject = st.text_input("Subject", "a silver dragon perched on a jagged cliff")
         action = st.text_input("Action", "roaring toward the stormy sky")
         environment = st.text_input("Environment", "craggy seaside coast at dusk")
-        style = st.selectbox("Style", ("digital matte painting, hyper-realistic", "illustration", "abstract", "photorealistic", "cel-shaded anime"))
-        # Add more creative fields as needed...
+        style = st.text_input("Style", "digital matte painting, hyper-realistic")
+        perspective = st.text_input("Perspective", "low-angle shot")
+        lighting = st.text_input("Lighting", "dramatic backlight with lightning flashes")
+        color_palette = st.text_input("Color Palette", "dark slate grays with electric blue highlights")
+        key_details = st.text_input("Key Details", "swirling mist around wings, ancient carved runes on cliff face")
+        atmosphere = st.text_input("Atmosphere", "tense and awe-inspiring")
+        composition = st.text_input("Composition", "dragon silhouette centered against lightning bolts")
         
         submitted = st.form_submit_button("Generate Image", use_container_width=True, type="primary")
         if submitted:
             if not st.session_state.openai_api_key:
                 st.error("Please enter your OpenAI API key in the left sidebar.")
             else:
-                final_prompt = f"{subject} {action}, {environment}, in the style of a {style}, 16:9 aspect ratio"
+                # Construct the comprehensive prompt from all input fields
+                final_prompt = (
+                    f"Subject: {subject}, Action: {action}, Environment: {environment}, Style: {style}, "
+                    f"Perspective: {perspective}, Lighting: {lighting}, Color Palette: {color_palette}, "
+                    f"Key Details: {key_details}, Atmosphere: {atmosphere}, Composition: {composition}. "
+                    f"Output Specs: 16:9 aspect ratio."
+                ).strip()
                 
                 with st.spinner("Generating and downloading your image..."):
                     result = generate_and_download_image(final_prompt, st.session_state.openai_api_key)
