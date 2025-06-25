@@ -3,6 +3,7 @@ from fpdf import FPDF
 import base64
 from openai import OpenAI
 import requests # Needed to download the image for PDF embedding
+import httpx
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -40,10 +41,13 @@ def get_current_slide():
         st.session_state.next_id = 1
     return st.session_state.slides[st.session_state.current_slide_idx]
 
+# app.py
+
 def generate_image_from_prompt(prompt):
     """
     Generates an image using the OpenAI DALL-E 3 API.
-    It securely reads the API key from Streamlit's secrets manager.
+    It securely reads the API key and explicitly configures the HTTP client
+    to avoid proxy-related errors.
     """
     try:
         # 1. Securely access the API key from Streamlit secrets
@@ -51,20 +55,23 @@ def generate_image_from_prompt(prompt):
         if not api_key:
             st.error("OpenAI API key is not set in Streamlit secrets.")
             return None
-            
-        # 2. Initialize the OpenAI client with the key
-        client = OpenAI(api_key=api_key)
 
-        # 3. Make the API call to generate the image
+        # 2. Explicitly create an httpx client, bypassing environment proxies <--- NEW
+        http_client = httpx.Client(proxies={})
+
+        # 3. Initialize the OpenAI client with the key AND our new http_client <--- UPDATED
+        client = OpenAI(api_key=api_key, http_client=http_client)
+
+        # 4. Make the API call to generate the image
         response = client.images.generate(
             model="dall-e-3",
             prompt=prompt,
-            size="1792x1024",  # A 16:9 aspect ratio size supported by DALL-E 3
+            size="1792x1024",
             quality="standard",
             n=1,
         )
-        
-        # 4. Extract the URL of the generated image
+
+        # 5. Extract the URL of the generated image
         image_url = response.data[0].url
         return image_url
 
