@@ -6,16 +6,21 @@ from openai import OpenAI
 import requests
 import os
 
-# --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Art Director's Briefing Tool",
     page_icon="🎨",
     layout="wide"
 )
 
-# --- STATE MANAGEMENT ---
 if 'slides' not in st.session_state:
-    st.session_state.slides = [{'id': 0, 'title': 'Slide 1: Title', 'text': 'Add your bullet points here.', 'image_prompt': None, 'image_url': None}]
+    st.session_state.slides = [{
+        'id': 0,
+        'title': 'Slide 1: Title',
+        'text': 'Add your bullet points here.',
+        'image_prompt': None,
+        'image_url': None,
+        'text_position': 'bottom'
+    }]
 if 'current_slide_idx' not in st.session_state:
     st.session_state.current_slide_idx = 0
 if 'next_id' not in st.session_state:
@@ -23,12 +28,7 @@ if 'next_id' not in st.session_state:
 if 'openai_api_key' not in st.session_state:
     st.session_state.openai_api_key = ""
 
-# --- HELPER FUNCTIONS ---
-
 def generate_image_from_prompt(prompt: str, api_key: str) -> str | None:
-    """
-    Generates an image URL using the DALL-E 3 API with the provided OpenAI API key.
-    """
     if not api_key:
         st.error("OpenAI API key is missing. Please enter it in the sidebar.")
         return None
@@ -40,7 +40,7 @@ def generate_image_from_prompt(prompt: str, api_key: str) -> str | None:
             prompt=prompt,
             size="1792x1024",
             quality="standard",
-            n=1,
+            n=1
         )
         return response.data[0].url
     except Exception as e:
@@ -51,11 +51,7 @@ def generate_image_from_prompt(prompt: str, api_key: str) -> str | None:
             st.error(f"Image generation failed: {msg}")
         return None
 
-
 def create_pdf_bytes_from_slides(slides: list[dict]) -> bytes:
-    """
-    Renders slides to a PDF and returns the raw PDF bytes.
-    """
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     for i, slide in enumerate(slides):
@@ -78,35 +74,53 @@ def create_pdf_bytes_from_slides(slides: list[dict]) -> bytes:
                 pdf.set_font("Arial", "I", 10)
                 pdf.multi_cell(0, 5, f"(Image embed failed: {img_err})")
                 pdf.ln(5)
+        position = slide.get('text_position', 'bottom')
+        text = slide.get('text', '')
+        pdf.set_fill_color(0, 0, 0)
+        pdf.set_text_color(255, 255, 255)
+        w = pdf.w - 20
+        h = 50
+        if position == 'top':
+            x, y = 10, 30
+        elif position == 'center':
+            x, y = 10, (pdf.h / 2) - (h / 2)
+        else:
+            x, y = 10, pdf.h - h - 15
+        pdf.rect(x, y, w, h, 'F')
+        pdf.set_xy(x + 2, y + 2)
         pdf.set_font("Arial", "", 12)
-        pdf.multi_cell(0, 10, slide.get('text', ''))
-    # Remove encode: output returns raw bytes
-    pdf_bytes = pdf.output(dest='S')
-    return pdf_bytes
-
+        pdf.multi_cell(w - 4, 8, text)
+        pdf.set_text_color(0, 0, 0)
+    pdf_data = pdf.output(dest='S')
+    if isinstance(pdf_data, str):
+        return pdf_data.encode('latin-1')
+    return pdf_data
 
 def create_download_link(val: bytes, filename: str) -> str:
-    """
-    Returns an HTML link for downloading the given bytes as a file.
-    """
     b64 = base64.b64encode(val).decode()
     return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download {filename}</a>'
 
-# --- UI LAYOUT ---
 col_left, col_center, col_right = st.columns([0.2, 0.5, 0.3])
 
 with col_left:
     st.header("Settings")
     st.session_state.openai_api_key = st.text_input(
-        "Enter OpenAI API Key", type="password", value=st.session_state.openai_api_key,
+        "Enter OpenAI API Key",
+        type="password",
+        value=st.session_state.openai_api_key,
         help="Your API key is stored temporarily and not saved."
     )
     st.write("---")
     st.header("Slides")
     if st.button("➕ Add New Slide", use_container_width=True):
-        new_slide = {'id': st.session_state.next_id,
-                     'title': f'Slide {st.session_state.next_id + 1}: New Slide',
-                     'text': '', 'image_prompt': None, 'image_url': None}
+        new_slide = {
+            'id': st.session_state.next_id,
+            'title': f'Slide {st.session_state.next_id + 1}: New Slide',
+            'text': '',
+            'image_prompt': None,
+            'image_url': None,
+            'text_position': 'bottom'
+        }
         st.session_state.slides.append(new_slide)
         st.session_state.next_id += 1
         st.session_state.current_slide_idx = len(st.session_state.slides) - 1
@@ -116,7 +130,7 @@ with col_left:
         st.session_state.slides.insert(idx - 1, st.session_state.slides.pop(idx))
         st.session_state.current_slide_idx = idx - 1
         st.rerun()
-    if st.button("⬇️ Move Slide Down", use_container_width=True, disabled=(idx >= len(st.session_state.slides)-1)):
+    if st.button("⬇️ Move Slide Down", use_container_width=True, disabled=(idx >= len(st.session_state.slides) - 1)):
         st.session_state.slides.insert(idx + 1, st.session_state.slides.pop(idx))
         st.session_state.current_slide_idx = idx + 1
         st.rerun()
@@ -139,18 +153,27 @@ with col_left:
 with col_center:
     st.header("Presentation Editor")
     st.write("---")
-    curr = (st.session_state.slides[st.session_state.current_slide_idx]
-            if st.session_state.slides else {'id':0,'title':'','text':'','image_prompt':None,'image_url':None})
+    curr = st.session_state.slides[st.session_state.current_slide_idx]
     title = st.text_input("Slide Title", value=curr['title'], key=f"title_{curr['id']}")
     curr['title'] = title
     text = st.text_area("Slide Text / Bullet Points", value=curr['text'], height=200, key=f"text_{curr['id']}")
     curr['text'] = text
+    position = st.selectbox("Text Position", ['bottom', 'top', 'center'], index=['bottom', 'top', 'center'].index(curr.get('text_position', 'bottom')))
+    curr['text_position'] = position
     st.write("---")
     st.subheader("Slide Preview")
     if curr.get('image_url'):
         st.image(curr['image_url'], caption=f"Generated from: {curr.get('image_prompt')}")
     else:
         st.info("Generate an image in the right panel and add it to this slide.")
+    st.markdown(f"<div style='position:relative;width:100%;height:200px;'>"
+                f"<div style='position:absolute;"
+                f"bottom:{'0' if position=='bottom' else 'auto'};"
+                f"top:{'0' if position=='top' else 'auto'};"
+                f"left:0;right:0;"
+                f"background-color:black;opacity:0.7;padding:10px;'>"
+                f"<p style='color:white;margin:0;'>{text.replace('\n','<br>')}</p>"
+                f"</div></div>", unsafe_allow_html=True)
 
 with col_right:
     st.header("Image Generator")
